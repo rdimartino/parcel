@@ -37,7 +37,12 @@ import BundleGraph, {
   bundleGraphToInternalBundleGraph,
 } from './public/BundleGraph';
 import PluginOptions from './public/PluginOptions';
-import {PARCEL_VERSION, HASH_REF_PREFIX, HASH_REF_REGEX} from './constants';
+import {
+  PARCEL_VERSION,
+  BUNDLE_HASH_REF_PREFIX,
+  BUNDLE_HASH_REF_REGEX,
+  ASSET_HASH_REF_REGEX,
+} from './constants';
 
 type Opts = {|
   config: ParcelConfig,
@@ -62,7 +67,7 @@ type CacheKeyMap = {|
   info: string,
 |};
 
-const BOUNDARY_LENGTH = HASH_REF_PREFIX.length + 32 - 1;
+const BOUNDARY_LENGTH = BUNDLE_HASH_REF_PREFIX.length + 32 - 1;
 
 export default class PackagerRunner {
   config: ParcelConfig;
@@ -191,7 +196,7 @@ export default class PackagerRunner {
   ): Promise<BundleInfo> {
     let {type, contents, map} = await this.getBundleResult(bundle, bundleGraph);
 
-    return this.writeToCache(cacheKeys, type, contents, map);
+    return this.writeToCache(cacheKeys, type, contents, map, bundleGraph);
   }
 
   async getBundleResult(
@@ -506,7 +511,7 @@ export default class PackagerRunner {
       outputFS,
       filePath,
       contentStream,
-      info.hashReferences,
+      info.hashReferences.length > 0,
       hashRefToNameHash,
       writeOptions,
     );
@@ -527,8 +532,9 @@ export default class PackagerRunner {
         outputFS,
         filePath + '.map',
         mapStream,
-        info.hashReferences,
+        info.hashReferences.length > 0,
         hashRefToNameHash,
+        null,
       );
     }
   }
@@ -538,6 +544,7 @@ export default class PackagerRunner {
     type: string,
     contents: Blob,
     map: ?Blob,
+    bundleGraph: InternalBundleGraph,
   ): Promise<BundleInfo> {
     let size = 0;
     let hash = crypto.createHash('md5');
@@ -545,17 +552,30 @@ export default class PackagerRunner {
     let hashReferences = [];
     await this.options.cache.setStream(
       cacheKeys.content,
-      blobToStream(contents).pipe(
-        new TapStream(buf => {
-          let str = boundaryStr + buf.toString();
-          hashReferences = hashReferences.concat(
-            str.match(HASH_REF_REGEX) ?? [],
-          );
-          size += buf.length;
-          hash.update(buf);
-          boundaryStr = str.slice(str.length - BOUNDARY_LENGTH);
-        }),
-      ),
+      blobToStream(contents)
+        .pipe(
+          replaceStream(ASSET_HASH_REF_REGEX, match => {
+            let id = getIdFromHashRef(match);
+            if (bundleGraph.assetExists(id)) {
+              return nullthrows(bundleGraph.getAssetById(id).contentHash);
+            } else return match;
+          }),
+        )
+        .pipe(
+          new TapStream(buf => {
+            let str = boundaryStr + buf.toString();
+            hashReferences = hashReferences.concat(
+              str.match(BUNDLE_HASH_REF_REGEX) ?? [],
+            );
+            size += buf.length;
+            boundaryStr = str.slice(str.length - BOUNDARY_LENGTH);
+          }),
+        )
+        .pipe(
+          new TapStream(buf => {
+            hash.update(buf);
+          }),
+        ),
     );
 
     if (map != null) {
@@ -571,13 +591,18 @@ function writeFileStream(
   fs: FileSystem,
   filePath: FilePath,
   stream: Readable,
-  hashReferences: Array<string>,
+  hasHashReferences: boolean,
   hashRefToNameHash: Map<string, string>,
   options: ?FileOptions,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    let initialStream = hashReferences.length
-      ? stream.pipe(replaceStream(hashRefToNameHash))
+    let initialStream = hasHashReferences
+      ? stream.pipe(
+          replaceStream(
+            BUNDLE_HASH_REF_REGEX,
+            match => hashRefToNameHash.get(match) || match,
+          ),
+        )
       : stream;
     let fsStream = fs.createWriteStream(filePath, options);
     let fsStreamClosed = new Promise(resolve => {
@@ -596,13 +621,13 @@ function writeFileStream(
   });
 }
 
-function replaceStream(hashRefToNameHash) {
+function replaceStream(pattern: RegExp, replacement: string => string) {
   let boundaryStr = '';
   return new Transform({
     transform(chunk, encoding, cb) {
       let str = boundaryStr + chunk.toString();
-      let replaced = str.replace(HASH_REF_REGEX, match => {
-        return hashRefToNameHash.get(match) || match;
+      let replaced = str.replace(pattern, match => {
+        return replacement(match);
       });
       boundaryStr = replaced.slice(replaced.length - BOUNDARY_LENGTH);
       let strUpToBoundary = replaced.slice(
@@ -666,5 +691,5 @@ function getBundlesIncludedInHash(
 }
 
 function getIdFromHashRef(hashRef: string) {
-  return hashRef.slice(HASH_REF_PREFIX.length);
+  return hashRef.slice(BUNDLE_HASH_REF_PREFIX.length);
 }
