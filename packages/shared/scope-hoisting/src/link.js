@@ -131,6 +131,11 @@ export function link({
       referencedAssets.add(asset);
     }
   });
+  referencedAssets = new Set(
+    [...referencedAssets].sort(({contentHash: a}, {contentHash: b}) =>
+      a.localeCompare(b),
+    ),
+  );
 
   function resolveSymbol(inputAsset, inputSymbol: Symbol, bundle) {
     let {asset, exportSymbol, symbol, loc} = bundleGraph.resolveSymbol(

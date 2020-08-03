@@ -116,14 +116,14 @@ export async function concat({
           isVariableDeclaration(statement) ||
           isExpressionStatement(statement)
         ) {
-          for (let depAsset of findRequires(
+          for (let {depAsset, hoist} of findRequires(
             bundle,
             bundleGraph,
             asset,
             statement,
           )) {
             if (!statementIndices.has(depAsset.id)) {
-              statementIndices.set(depAsset.id, i);
+              statementIndices.set(depAsset.id, hoist ? 0 : i);
             }
           }
         }
@@ -302,7 +302,7 @@ const FIND_REQUIRES_VISITOR = {
       bundle: NamedBundle,
       bundleGraph: BundleGraph<NamedBundle>,
       asset: Asset,
-      result: Array<Asset>,
+      result: Array<{|depAsset: Asset, hoist?: boolean|}>,
     |},
   ) {
     let {arguments: args, callee} = node;
@@ -323,7 +323,10 @@ const FIND_REQUIRES_VISITOR = {
       // ("deferred") this dependency away as an unused reexport
       let resolution = bundleGraph.getDependencyResolution(dep, bundle);
       if (resolution) {
-        result.push(resolution);
+        result.push({
+          depAsset: resolution,
+          hoist: !!dep.meta.hoist,
+        });
       }
     }
   },
@@ -334,7 +337,7 @@ function findRequires(
   bundleGraph: BundleGraph<NamedBundle>,
   asset: Asset,
   ast: Node,
-): Array<Asset> {
+): Array<{|depAsset: Asset, hoist?: boolean|}> {
   let result = [];
   walkSimple(ast, FIND_REQUIRES_VISITOR, {asset, bundle, bundleGraph, result});
 
