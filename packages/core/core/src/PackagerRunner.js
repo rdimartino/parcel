@@ -196,7 +196,14 @@ export default class PackagerRunner {
   ): Promise<BundleInfo> {
     let {type, contents, map} = await this.getBundleResult(bundle, bundleGraph);
 
-    return this.writeToCache(cacheKeys, type, contents, map, bundleGraph);
+    return this.writeToCache(
+      cacheKeys,
+      type,
+      contents,
+      map,
+      bundleGraph,
+      bundle.hashReference,
+    );
   }
 
   async getBundleResult(
@@ -545,11 +552,15 @@ export default class PackagerRunner {
     contents: Blob,
     map: ?Blob,
     bundleGraph: InternalBundleGraph,
+    ownHashReference: string,
   ): Promise<BundleInfo> {
     let size = 0;
     let hash = crypto.createHash('md5');
     let boundaryStr = '';
     let hashReferences = [];
+    let ownHashReferencePlaceholder = 'H'.repeat(ownHashReference.length);
+    let ownHashReferenceRegex = new RegExp(ownHashReference, 'g');
+
     await this.options.cache.setStream(
       cacheKeys.content,
       blobToStream(contents)
@@ -568,12 +579,14 @@ export default class PackagerRunner {
               str.match(BUNDLE_HASH_REF_REGEX) ?? [],
             );
             size += buf.length;
+            hash.update(
+              str
+                .replace(ownHashReferenceRegex, () => {
+                  return ownHashReferencePlaceholder;
+                })
+                .slice(boundaryStr.length),
+            );
             boundaryStr = str.slice(str.length - BOUNDARY_LENGTH);
-          }),
-        )
-        .pipe(
-          new TapStream(buf => {
-            hash.update(buf);
           }),
         ),
     );
