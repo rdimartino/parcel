@@ -1,8 +1,13 @@
 /**
  * Generates a babel config for stripping away Flow types.
  */
+
+const commentsOrWhitespaceRegex = /(^#!.*$)?(\/{2}.*$|\/\*[^]*?\*\/|\s*)+/m;
+const flowFlagRegex = /^(\/{2}|\/\*+) *@flow/m;
+
 function getFlowConfig(asset) {
-  if (/^(\/{2}|\/\*+) *@flow/.test(asset.contents.substring(0, 20))) {
+  const match = commentsOrWhitespaceRegex.exec(asset.contents);
+  if (match && flowFlagRegex.test(match[0])) {
     return {
       internal: true,
       babelVersion: 7,
